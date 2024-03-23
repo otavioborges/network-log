@@ -1,0 +1,25 @@
+# Build directories
+build*
+
+# Pre-compilation files
+*.o
+*.la
+*.a
+*.map
+*.Map
+
+# Autoconf auto-generated
+autom4te.cache
+aclocal.m4
+compile
+config.*
+configure
+COPYING
+depcomp
+INSTALL
+install-sh
+**/Makefile.in
+missing
+
+# Clion folders
+.idea

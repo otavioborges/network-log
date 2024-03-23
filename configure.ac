@@ -1,5 +1,5 @@
 AC_INIT([network-log], [0.1], [otavio.car.borges@gmail.com])
-AM_INIT_AUTOMAKE([-Wall -Werror])
+AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_PROG_CC
 
 PKG_CHECK_MODULES(LIBJSON, [json-c >= 0.15])
