@@ -6,12 +6,16 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
 
 #include "options.h"
 #include "config.h"
 
-#define PID_FILE      "./network-log.pid"
-//#define PID_FILE      "/var/run/network-log.pid"
+#define BUFFER_LENGTH    2048
+#define POLL_TIMEO_MS    100
+#define PID_FILE         "./network-log.pid"
+//#define PID_FILE         "/var/run/network-log.pid"
 
 static void sig_handler(int signo);
 static int print_help(int rtn, const char *argv0, char *msg, ...);
@@ -26,11 +30,14 @@ static const struct option_with_description _program_args[] = {
 static size_t _args_length = sizeof(_program_args) / sizeof(struct option_with_description);
 
 int main (int argc, char **argv) {
-    int idx, lopt, c = 0, background = 0;
+    int idx, lopt, c = 0, background = 0, rtn = 0;
     struct option *_gen_opts = NULL;
     char *input_file = NULL;
     pid_t pid;
-    FILE *h_pid, h_log;
+    FILE *h_pid, *h_log;
+    struct pollfd pollfd;
+    char read_buffer[BUFFER_LENGTH] = {0};
+    size_t line_length = 0;
 
     /* Mount long options array */
     _gen_opts = (struct option *) malloc(sizeof(struct option) * _args_length);
@@ -97,7 +104,71 @@ int main (int argc, char **argv) {
     }
 
     /* We are either foreground or daemon */
+    printf("Trying to open log file \'%s\'...\n", input_file);
+    rtn = open(input_file, O_RDONLY);
+    if (rtn < 0) {
+        fprintf(stderr, "Unable to open file \'%s\'. Reason: %s (%d)\n", input_file, strerror(errno), errno);
+        goto terminate;
+    }
 
+//    h_log = fdopen(rtn, "r");
+//    if (h_log == NULL) {
+//        fprintf(stderr, "Unable to access \'%s\' as a stream. Reason: %s (%d)\n", input_file, strerror(errno), errno);
+//        rtn = -1;
+//        goto terminate;
+//    }
+
+    memset(&pollfd, 0, sizeof(struct pollfd));
+    pollfd.fd = rtn;
+    pollfd.events = POLLIN | POLLERR | POLLHUP;
+
+    while(_continue) {
+        rtn = poll(&pollfd, 1, POLL_TIMEO_MS);
+        if (rtn < 0) {
+            fprintf(stderr, "Error waiting for log event. Reason: %s (%d)\n", strerror(errno), errno);
+            _continue = 0;
+            continue;
+        } else if (rtn == 0) {
+            /* simple timeout, just keep loop alive */
+            continue;
+        }
+
+        if (pollfd.revents & (POLLERR | POLLHUP)) {
+            fprintf(stderr, "Error polling file or stream was closed. Terminating...\n");
+            _continue = 0;
+            continue;
+        }
+
+        while (read(pollfd.fd, (read_buffer + line_length), 1) > 0) {
+            line_length++;
+            if (line_length >= BUFFER_LENGTH) {
+                printf("Line too big for buffer, discarding\n");
+                break;
+            } else if (read_buffer[(line_length - 1)] != '\n') {
+                continue;
+            }
+
+            /* By this point we should have a full line */
+            printf("Line: %s", read_buffer);
+
+            /* Clear line */
+            memset(read_buffer, 0, BUFFER_LENGTH);
+            line_length = 0;
+        }
+
+        pollfd.revents = 0;
+        memset(read_buffer, 0, BUFFER_LENGTH);
+        line_length = 0;
+
+//        while(getline(&read_buffer, &line_length, h_log) >= 0) {
+//            /* Process a new line on file */
+//            printf("New Line: %s", read_buffer);
+//        }
+    }
+
+    printf("Shutting down...\n");
+    fclose(h_log);
+    close(pollfd.fd);
 
 terminate:
     if (background) {
@@ -108,7 +179,7 @@ terminate:
     }
 
     printf("Gracefully terminated application.");
-	return 0;
+	return rtn;
 }
 
 static void sig_handler(int signo) {
