@@ -8,12 +8,15 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "options.h"
 #include "config.h"
+#include "device_stat.h"
 
 #define BUFFER_LENGTH    2048
-#define POLL_TIMEO_MS    100
+#define POLL_TIMEO_US    100000
 #define PID_FILE         "./network-log.pid"
 //#define PID_FILE         "/var/run/network-log.pid"
 
@@ -35,9 +38,12 @@ int main (int argc, char **argv) {
     char *input_file = NULL;
     pid_t pid;
     FILE *h_pid, *h_log;
-    struct pollfd pollfd;
-    char read_buffer[BUFFER_LENGTH] = {0};
+    char *read_buffer = NULL;
     size_t line_length = 0;
+    ssize_t rtn_length;
+    long log_current_offset = 0, log_total_size;
+    struct network_node *net_devices = NULL;
+    size_t net_dev_count = 0;
 
     /* Mount long options array */
     _gen_opts = (struct option *) malloc(sizeof(struct option) * _args_length);
@@ -105,70 +111,62 @@ int main (int argc, char **argv) {
 
     /* We are either foreground or daemon */
     printf("Trying to open log file \'%s\'...\n", input_file);
-    rtn = open(input_file, O_RDONLY);
+    rtn = open(input_file, O_RDONLY | O_NONBLOCK);
     if (rtn < 0) {
         fprintf(stderr, "Unable to open file \'%s\'. Reason: %s (%d)\n", input_file, strerror(errno), errno);
         goto terminate;
     }
 
-//    h_log = fdopen(rtn, "r");
-//    if (h_log == NULL) {
-//        fprintf(stderr, "Unable to access \'%s\' as a stream. Reason: %s (%d)\n", input_file, strerror(errno), errno);
-//        rtn = -1;
-//        goto terminate;
-//    }
+    h_log = fdopen(rtn, "r");
+    if (h_log == NULL) {
+        fprintf(stderr, "Unable to access \'%s\' as a stream. Reason: %s (%d)\n", input_file, strerror(errno), errno);
+        rtn = -1;
+        goto terminate;
+    }
 
-    memset(&pollfd, 0, sizeof(struct pollfd));
-    pollfd.fd = rtn;
-    pollfd.events = POLLIN | POLLERR | POLLHUP;
-
+    signal(SIGINT, sig_handler);
     while(_continue) {
-        rtn = poll(&pollfd, 1, POLL_TIMEO_MS);
-        if (rtn < 0) {
-            fprintf(stderr, "Error waiting for log event. Reason: %s (%d)\n", strerror(errno), errno);
-            _continue = 0;
-            continue;
-        } else if (rtn == 0) {
-            /* simple timeout, just keep loop alive */
-            continue;
-        }
+        fseek(h_log, 0, SEEK_END);
+        log_total_size = ftell(h_log);
+        fseek(h_log, log_current_offset, SEEK_SET);
 
-        if (pollfd.revents & (POLLERR | POLLHUP)) {
-            fprintf(stderr, "Error polling file or stream was closed. Terminating...\n");
-            _continue = 0;
-            continue;
-        }
-
-        while (read(pollfd.fd, (read_buffer + line_length), 1) > 0) {
-            line_length++;
-            if (line_length >= BUFFER_LENGTH) {
-                printf("Line too big for buffer, discarding\n");
-                break;
-            } else if (read_buffer[(line_length - 1)] != '\n') {
-                continue;
+        if (log_current_offset < log_total_size) {
+            while ((rtn_length = getline(&read_buffer, &line_length, h_log)) >= 0) {
+                log_current_offset += rtn_length;
+                /* Process a new line on file */
+                rtn = device_stat_parse_line(&net_devices, &net_dev_count, read_buffer);
+                if (rtn <= -3) {
+                    fprintf(stderr, "Corrupted network device list. Terminating...\n");
+                    _continue = 0;
+                    break;
+                }
             }
-
-            /* By this point we should have a full line */
-            printf("Line: %s", read_buffer);
-
-            /* Clear line */
-            memset(read_buffer, 0, BUFFER_LENGTH);
-            line_length = 0;
+        } else {
+            usleep(POLL_TIMEO_US);
         }
+    }
 
-        pollfd.revents = 0;
-        memset(read_buffer, 0, BUFFER_LENGTH);
-        line_length = 0;
+    int jdx;
+    if (net_devices) {
+        for (idx = 0; idx < net_dev_count; idx++) {
+            printf("Network dev.: %s (total data %ldB):\n",
+                   inet_ntoa(net_devices[idx].own.ip), net_devices[idx].own.total_data);
 
-//        while(getline(&read_buffer, &line_length, h_log) >= 0) {
-//            /* Process a new line on file */
-//            printf("New Line: %s", read_buffer);
-//        }
+            for (jdx = 0; jdx < net_devices[idx].peers_length; jdx++) {
+                printf("\tPeer: %s (total data: %ldB)\n",
+                       inet_ntoa(net_devices[idx].peers[jdx].ip), net_devices[idx].peers[jdx].total_data);
+            }
+        }
     }
 
     printf("Shutting down...\n");
     fclose(h_log);
-    close(pollfd.fd);
+
+    if (read_buffer) {
+        free(read_buffer);
+        read_buffer = NULL;
+        line_length = 0;
+    }
 
 terminate:
     if (background) {
@@ -178,7 +176,7 @@ terminate:
         }
     }
 
-    printf("Gracefully terminated application.");
+    printf("Gracefully terminated application.\n");
 	return rtn;
 }
 
