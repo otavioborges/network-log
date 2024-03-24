@@ -31,13 +31,14 @@ static const struct option_with_description _program_args[] = {
         {{"version", no_argument, NULL, 'v'}, NULL, "Show application version"},
         {{"input_log", required_argument, NULL, 'i'}, "log file", "Iptables generated logs with package details"},
         {{"background", no_argument, NULL, 'b'}, NULL, "A daemon will be created at background and parent will return."},
+        {{"http_path", required_argument, NULL, 'H'}, "http data", "Path for HTTP server files"},
 };
 static size_t _args_length = sizeof(_program_args) / sizeof(struct option_with_description);
 
 int main (int argc, char **argv) {
     int idx, lopt, c = 0, background = 0, rtn = 0;
     struct option *_gen_opts = NULL;
-    char *input_file = NULL;
+    char *input_file = NULL, *http_path = NULL;
     pid_t pid;
     FILE *h_pid, *h_log;
     char *read_buffer = NULL;
@@ -53,7 +54,7 @@ int main (int argc, char **argv) {
         _gen_opts[idx] = _program_args[idx]._opt;
 
     while (c >= 0) {
-        c = getopt_long(argc, argv, "hvi:", _gen_opts, &lopt);
+        c = getopt_long(argc, argv, "hvi:bH:", _gen_opts, &lopt);
         if (c == -1)
             break;
 
@@ -70,6 +71,13 @@ int main (int argc, char **argv) {
                 else
                     input_file = strdup(optarg);
                 break;
+            case 'H':
+                if (optarg == NULL)
+                    return print_help(-1, argv[0],
+                                      "Argument \'%s\' requires an argument.\n", _gen_opts[lopt].name);
+                else
+                    http_path = strdup(optarg);
+                break;
             case 'b':
                 background = 1;
                 break;
@@ -85,6 +93,9 @@ int main (int argc, char **argv) {
 
     if (input_file == NULL)
         return print_help(-1, argv[0], "Missing mandatory argument \'%s\'\n", _program_args[2]._opt.name);
+
+    if (http_path == NULL)
+        return print_help(-1, argv[0], "Missing mandatory argument \'%s\'\n", _program_args[4]._opt.name);
 
     if (background) {
         printf("Instantiating daemon...\n");
@@ -127,7 +138,7 @@ int main (int argc, char **argv) {
     }
 
     printf("Initating HTTP server at port %u...\n", HTTP_DEFAULT_PORT);
-    if (http_init(HTTP_DEFAULT_PORT)) {
+    if (http_init(HTTP_DEFAULT_PORT, http_path)) {
         fprintf(stderr, "Error initiating HTTP server\n");
         rtn = -1;
         goto terminate;
