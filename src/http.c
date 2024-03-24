@@ -13,6 +13,11 @@
 
 #include "http.h"
 
+#define JSON_KEY_DEVICE               "device"
+#define JSON_KEY_SPEED                "speed"
+#define JSON_KEY_UPLOAD               "upload"
+#define JSON_KEY_DOWNLOAD             "download"
+
 #define MIME_HTTP                     "text/html"
 #define MIME_JSON                     "text/json"
 #define MIME_JAVASCRIPT               "text/javascript"
@@ -23,13 +28,18 @@
 
 #define RESP_INT_BUFFER_LENGTH        2048
 
-static const char *http_resp_404 = "<html><head><title>Not Found</title></head><body>{\"error\":404}</body></html>";
-static const char *http_resp_400 = "<html><head><title>Bad Request</title></head><body>{\"error\":400}</body></html>";
-static const char *http_resp_401 = "<html><head><title>Unauthorized</title></head><body>{\"error\":401}</body></html>";
+static const char *http_resp_404 = "{\"error\":404}";
+static const char *http_resp_400 = "{\"error\":400}";
+static const char *http_resp_401 = "{\"error\":401}";
 
 static pthread_mutex_t http_network_list_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct network_node *_internal_nodes = NULL;
-static size_t _int_node_count = 0;
+
+static struct network_node *_upload_nodes = NULL;
+static size_t _upload_node_count = 0;
+
+static struct network_node *_download_nodes = NULL;
+static size_t _download_node_count = 0;
+
 static struct MHD_Daemon *_daemon = NULL;
 static char *_http_file_path = NULL;
 
@@ -73,21 +83,31 @@ void http_end(void) {
     _daemon = NULL;
 }
 
-void http_update_network_list(struct network_node *nodes, size_t length) {
+void http_update_upload_list(struct network_node *nodes, size_t length) {
     pthread_mutex_lock(&http_network_list_lock);
-    if (_internal_nodes) {
-        free(_internal_nodes);
-        _internal_nodes = NULL;
+    if (_upload_nodes) {
+        free(_upload_nodes);
+        _upload_nodes = NULL;
     }
 
-    _internal_nodes = (struct network_node *) malloc(sizeof(struct network_node) * length);
-    memcpy(_internal_nodes, nodes, sizeof(struct network_node) * length);
-    _int_node_count = length;
+    _upload_nodes = (struct network_node *) malloc(sizeof(struct network_node) * length);
+    memcpy(_upload_nodes, nodes, sizeof(struct network_node) * length);
+    _upload_node_count = length;
     pthread_mutex_unlock(&http_network_list_lock);
 }
 
-#define JSON_KEY_DEVICE    "device"
-#define JSON_KEY_SPEED     "speed"
+void http_update_download_list(struct network_node *nodes, size_t length) {
+    pthread_mutex_lock(&http_network_list_lock);
+    if (_download_nodes) {
+        free(_download_nodes);
+        _upload_nodes = NULL;
+    }
+
+    _download_nodes = (struct network_node *) malloc(sizeof(struct network_node) * length);
+    memcpy(_download_nodes, nodes, sizeof(struct network_node) * length);
+    _download_node_count = length;
+    pthread_mutex_unlock(&http_network_list_lock);
+}
 
 static enum MHD_Result ahc_echo (void *cls,
           struct MHD_Connection *connection,
@@ -109,17 +129,40 @@ static enum MHD_Result ahc_echo (void *cls,
         resp_code = MHD_HTTP_UNAUTHORIZED;
         resp_length = strlen(resp_str);
     } else {
-        if (strcmp(url,"/api/devices") == 0) {
+        if (strcmp(url,"/api/upload") == 0) {
             jarray = json_object_new_array();
 
             pthread_mutex_lock(&http_network_list_lock);
-            for (idx = 0; idx < _int_node_count; idx++) {
+            for (idx = 0; idx < _upload_node_count; idx++) {
                 jobj = json_object_new_object();
                 json_object_object_add(jobj, JSON_KEY_DEVICE,
-                                       json_object_new_string(inet_ntoa(_internal_nodes[idx].own.ip)));
+                                       json_object_new_string(inet_ntoa(_upload_nodes[idx].own.ip)));
 
                 json_object_object_add(jobj, JSON_KEY_SPEED,
-                                       json_object_new_double((double) _internal_nodes[idx].avg_speed));
+                                       json_object_new_double((double) _upload_nodes[idx].avg_speed));
+
+                json_object_array_add(jarray, jobj);
+            }
+
+            strcpy(generated_resp, json_object_to_json_string(jarray));
+            pthread_mutex_unlock(&http_network_list_lock);
+
+            json_object_put(jarray);
+
+            resp_str = generated_resp;
+            resp_code = MHD_HTTP_OK;
+            resp_length = strlen(resp_str);
+        } else if (strcmp(url,"/api/download") == 0) {
+            jarray = json_object_new_array();
+
+            pthread_mutex_lock(&http_network_list_lock);
+            for (idx = 0; idx < _download_node_count; idx++) {
+                jobj = json_object_new_object();
+                json_object_object_add(jobj, JSON_KEY_DEVICE,
+                                       json_object_new_string(inet_ntoa(_download_nodes[idx].own.ip)));
+
+                json_object_object_add(jobj, JSON_KEY_SPEED,
+                                       json_object_new_double((double) _download_nodes[idx].avg_speed));
 
                 json_object_array_add(jarray, jobj);
             }
@@ -134,7 +177,8 @@ static enum MHD_Result ahc_echo (void *cls,
             resp_length = strlen(resp_str);
         } else if (strcmp(url,"/api/speed") == 0) {
             jobj = json_object_new_object();
-            json_object_object_add(jobj, JSON_KEY_SPEED, json_object_new_double((double)device_stat_net_speed()));
+            json_object_object_add(jobj, JSON_KEY_UPLOAD, json_object_new_double((double) device_stat_net_speed(DIR_UPLOAD)));
+            json_object_object_add(jobj, JSON_KEY_DOWNLOAD, json_object_new_double((double) device_stat_net_speed(DIR_DOWNLOAD)));
 
             strcpy(generated_resp, json_object_to_json_string(jobj));
             json_object_put(jobj);

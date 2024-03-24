@@ -9,6 +9,11 @@
 #include <netinet/in.h>
 #include <stddef.h>
 
+typedef enum {
+    DIR_UPLOAD,
+    DIR_DOWNLOAD
+} traffic_dir_t;
+
 struct device_stat {
     struct in_addr ip;
     uint64_t total_data;
@@ -24,7 +29,7 @@ struct network_node {
 };
 
 int device_stat_init(struct network_node *nodes);
-int device_stat_parse_line(struct network_node **nodes, size_t *length, char *line);
-float device_stat_net_speed(void);
+int device_stat_parse_line(struct network_node **nodes, size_t *length, char *line, traffic_dir_t upload);
+float device_stat_net_speed(traffic_dir_t direction);
 
 #endif //NETWORK_LOG_DEVICE_STAT_H

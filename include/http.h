@@ -12,6 +12,7 @@
 
 int http_init(unsigned short port, char *http_file_path);
 void http_end(void);
-void http_update_network_list(struct network_node *nodes, size_t length);
+void http_update_upload_list(struct network_node *nodes, size_t length);
+void http_update_download_list(struct network_node *nodes, size_t length);
 
 #endif //NETWORK_LOG_HTTP_H

@@ -29,24 +29,26 @@ static int _continue = 1;
 static const struct option_with_description _program_args[] = {
         {{"help", no_argument, NULL, 'h'}, NULL, "Show this message"},
         {{"version", no_argument, NULL, 'v'}, NULL, "Show application version"},
-        {{"input_log", required_argument, NULL, 'i'}, "log file", "Iptables generated logs with package details"},
+        {{"upload-log", required_argument, NULL, 'u'}, "uload file", "Iptables generated logs with outgoing packages"},
+        {{"download-log", required_argument, NULL, 'd'}, "download file", "Iptables generated logs with incoming packages"},
         {{"background", no_argument, NULL, 'b'}, NULL, "A daemon will be created at background and parent will return."},
-        {{"http_path", required_argument, NULL, 'H'}, "http data", "Path for HTTP server files"},
+        {{"http-path", required_argument, NULL, 'H'}, "http data", "Path for HTTP server files"},
 };
 static size_t _args_length = sizeof(_program_args) / sizeof(struct option_with_description);
 
 int main (int argc, char **argv) {
     int idx, lopt, c = 0, background = 0, rtn = 0;
     struct option *_gen_opts = NULL;
-    char *input_file = NULL, *http_path = NULL;
+    char *upload_file = NULL, *download_file = NULL, *http_path = NULL;
     pid_t pid;
-    FILE *h_pid, *h_log;
-    char *read_buffer = NULL;
-    size_t line_length = 0;
+    FILE *h_pid, *h_upload, *h_download;
+    char *read_upload = NULL, *read_download = NULL;
+    size_t upload_line = 0, download_line = 0;
     ssize_t rtn_length;
-    long log_current_offset = 0, log_total_size;
-    struct network_node *net_devices = NULL;
-    size_t net_dev_count = 0;
+    long upload_current_offset = 0, upload_total_size;
+    long download_current_offset = 0, download_total_size;
+    struct network_node *net_up_devices = NULL, *net_dw_devices = NULL;
+    size_t net_up_dev_count = 0, net_dw_dev_count = 0;
 
     /* Mount long options array */
     _gen_opts = (struct option *) malloc(sizeof(struct option) * _args_length);
@@ -54,7 +56,7 @@ int main (int argc, char **argv) {
         _gen_opts[idx] = _program_args[idx]._opt;
 
     while (c >= 0) {
-        c = getopt_long(argc, argv, "hvi:bH:", _gen_opts, &lopt);
+        c = getopt_long(argc, argv, "hvu:d:bH:", _gen_opts, &lopt);
         if (c == -1)
             break;
 
@@ -64,12 +66,19 @@ int main (int argc, char **argv) {
             case 'v':
                 printf("%s - v%s\n", PACKAGE_NAME, PACKAGE_VERSION);
                 return 0;
-            case 'i':
+            case 'u':
                 if (optarg == NULL)
                     return print_help(-1, argv[0],
                                       "Argument \'%s\' requires an argument.\n", _gen_opts[lopt].name);
                 else
-                    input_file = strdup(optarg);
+                    upload_file = strdup(optarg);
+                break;
+            case 'd':
+                if (optarg == NULL)
+                    return print_help(-1, argv[0],
+                                      "Argument \'%s\' requires an argument.\n", _gen_opts[lopt].name);
+                else
+                    download_file = strdup(optarg);
                 break;
             case 'H':
                 if (optarg == NULL)
@@ -91,11 +100,14 @@ int main (int argc, char **argv) {
     free(_gen_opts);
     _gen_opts = NULL;
 
-    if (input_file == NULL)
+    if (upload_file == NULL)
         return print_help(-1, argv[0], "Missing mandatory argument \'%s\'\n", _program_args[2]._opt.name);
 
+    if (download_file == NULL)
+        return print_help(-1, argv[0], "Missing mandatory argument \'%s\'\n", _program_args[3]._opt.name);
+
     if (http_path == NULL)
-        return print_help(-1, argv[0], "Missing mandatory argument \'%s\'\n", _program_args[4]._opt.name);
+        return print_help(-1, argv[0], "Missing mandatory argument \'%s\'\n", _program_args[5]._opt.name);
 
     if (background) {
         printf("Instantiating daemon...\n");
@@ -123,16 +135,28 @@ int main (int argc, char **argv) {
     }
 
     /* We are either foreground or daemon */
-    printf("Trying to open log file \'%s\'...\n", input_file);
-    rtn = open(input_file, O_RDONLY | O_NONBLOCK);
+    printf("Trying to open log file \'%s\'...\n", upload_file);
+    rtn = open(upload_file, O_RDONLY | O_NONBLOCK);
     if (rtn < 0) {
-        fprintf(stderr, "Unable to open file \'%s\'. Reason: %s (%d)\n", input_file, strerror(errno), errno);
+        fprintf(stderr, "Unable to open file \'%s\'. Reason: %s (%d)\n", upload_file, strerror(errno), errno);
+        goto terminate;
+    }
+    h_upload = fdopen(rtn, "r");
+    if (h_upload == NULL) {
+        fprintf(stderr, "Unable to access \'%s\' as a stream. Reason: %s (%d)\n", upload_file, strerror(errno), errno);
+        rtn = -1;
         goto terminate;
     }
 
-    h_log = fdopen(rtn, "r");
-    if (h_log == NULL) {
-        fprintf(stderr, "Unable to access \'%s\' as a stream. Reason: %s (%d)\n", input_file, strerror(errno), errno);
+    printf("Trying to open log file \'%s\'...\n", download_file);
+    rtn = open(download_file, O_RDONLY | O_NONBLOCK);
+    if (rtn < 0) {
+        fprintf(stderr, "Unable to open file \'%s\'. Reason: %s (%d)\n", download_file, strerror(errno), errno);
+        goto terminate;
+    }
+    h_download = fdopen(rtn, "r");
+    if (h_download == NULL) {
+        fprintf(stderr, "Unable to access \'%s\' as a stream. Reason: %s (%d)\n", download_file, strerror(errno), errno);
         rtn = -1;
         goto terminate;
     }
@@ -144,50 +168,84 @@ int main (int argc, char **argv) {
         goto terminate;
     }
 
+    /* Skip stale data from logs.
+     * TODO: in the future we should use the timestamps on the logs
+     */
+    fseek(h_upload, 0, SEEK_END);
+    upload_current_offset = ftell(h_upload);
+    fseek(h_download, 0, SEEK_END);
+    download_current_offset = ftell(h_download);
+
     signal(SIGINT, sig_handler);
     while(_continue) {
-        fseek(h_log, 0, SEEK_END);
-        log_total_size = ftell(h_log);
-        fseek(h_log, log_current_offset, SEEK_SET);
+        fseek(h_upload, 0, SEEK_END);
+        upload_total_size = ftell(h_upload);
+        fseek(h_upload, upload_current_offset, SEEK_SET);
 
-        if (log_current_offset < log_total_size) {
-            while ((rtn_length = getline(&read_buffer, &line_length, h_log)) >= 0) {
-                log_current_offset += rtn_length;
+        if (upload_current_offset < upload_total_size) {
+            while ((rtn_length = getline(&read_upload, &upload_line, h_upload)) >= 0) {
+                upload_current_offset += rtn_length;
                 /* Process a new line on file */
-                rtn = device_stat_parse_line(&net_devices, &net_dev_count, read_buffer);
+                rtn = device_stat_parse_line(&net_up_devices, &net_up_dev_count, read_upload, DIR_UPLOAD);
                 if (rtn <= -3) {
-                    fprintf(stderr, "Corrupted network device list. Terminating...\n");
+                    fprintf(stderr, "Corrupted network upload device list. Terminating...\n");
                     _continue = 0;
                     break;
                 }
-                http_update_network_list(net_devices, net_dev_count);
+                http_update_upload_list(net_up_devices, net_up_dev_count);
+            }
+        } else {
+            usleep(POLL_TIMEO_US);
+        }
+
+        /* Check for the download side of things */
+        fseek(h_download, 0, SEEK_END);
+        download_total_size = ftell(h_download);
+        fseek(h_download, download_current_offset, SEEK_SET);
+
+        if (download_current_offset < download_total_size) {
+            while ((rtn_length = getline(&read_download, &download_line, h_download)) >= 0) {
+                download_current_offset += rtn_length;
+                /* Process a new line on file */
+                rtn = device_stat_parse_line(&net_dw_devices, &net_dw_dev_count, read_download, DIR_DOWNLOAD);
+                if (rtn <= -3) {
+                    fprintf(stderr, "Corrupted network download device list. Terminating...\n");
+                    _continue = 0;
+                    break;
+                }
+                http_update_download_list(net_dw_devices, net_dw_dev_count);
             }
         } else {
             usleep(POLL_TIMEO_US);
         }
     }
 
-    int jdx;
-    if (net_devices) {
-        for (idx = 0; idx < net_dev_count; idx++) {
-            printf("Network dev.: %s (total data %ldB) (Avg. Speed: %.3fBps)\n",
-                   inet_ntoa(net_devices[idx].own.ip), net_devices[idx].own.total_data, net_devices[idx].avg_speed);
-
-            for (jdx = 0; jdx < net_devices[idx].peers_length; jdx++) {
-                printf("\tPeer: %s (total data: %ldB)\n",
-                       inet_ntoa(net_devices[idx].peers[jdx].ip), net_devices[idx].peers[jdx].total_data);
-            }
-        }
-    }
+//    int jdx;
+//    if (net_up_devices) {
+//        for (idx = 0; idx < net_up_dev_count; idx++) {
+//            printf("Network dev.: %s (total data %ldB) (Avg. Speed: %.3fBps)\n",
+//                   inet_ntoa(net_up_devices[idx].own.ip), net_up_devices[idx].own.total_data, net_up_devices[idx].avg_speed);
+//
+//            for (jdx = 0; jdx < net_up_devices[idx].peers_length; jdx++) {
+//                printf("\tPeer: %s (total data: %ldB)\n",
+//                       inet_ntoa(net_up_devices[idx].peers[jdx].ip), net_up_devices[idx].peers[jdx].total_data);
+//            }
+//        }
+//    }
 
     printf("Shutting down...\n");
-    fclose(h_log);
+    fclose(h_upload);
     http_end();
 
-    if (read_buffer) {
-        free(read_buffer);
-        read_buffer = NULL;
-        line_length = 0;
+    if (read_upload) {
+        free(read_upload);
+        read_upload = NULL;
+        upload_line = 0;
+    }
+    if (read_download) {
+        free(read_download);
+        read_download = NULL;
+        download_line = 0;
     }
 
 terminate:

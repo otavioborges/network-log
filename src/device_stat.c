@@ -10,16 +10,23 @@
 #include <time.h>
 #include "device_stat.h"
 
-#define SECONDS_FOR_SPEED_CALC   1
+#define SECONDS_FOR_SPEED_CALC   3
+#define TOTAL_SPEED_AVG_LENGTH   8
 
-static uint64_t _total_data_traffic = 0;
-static struct timespec _total_ellapsed = {0};
-static float _total_speed = 0;
+static uint64_t _total_upload_traffic = 0;
+static struct timespec _total_upload_ellapsed = {0};
+static float _total_upload_speed[TOTAL_SPEED_AVG_LENGTH];
+static int _total_upload_idx = 0;
+
+static uint64_t _total_download_traffic = 0;
+static struct timespec _total_download_ellapsed = {0};
+static float _total_download_speed[TOTAL_SPEED_AVG_LENGTH];
+static int _total_download_idx = 0;
 
 static struct network_node *search_list(struct network_node *nodes, size_t length, struct in_addr target_ip);
 static struct device_stat *search_device(struct device_stat *devs, size_t length, struct in_addr target_ip);
 
-int device_stat_parse_line(struct network_node **nodes, size_t *length, char *line) {
+int device_stat_parse_line(struct network_node **nodes, size_t *length, char *line, traffic_dir_t upload) {
     int rtn = 0;
     struct in_addr sender, rcv;
     size_t pkt_length = 0;
@@ -54,19 +61,39 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
         token = strtok(NULL, " ");
     }
 
-    if (_total_ellapsed.tv_sec == 0) {
-        memcpy(&_total_ellapsed, &now, sizeof(struct timespec));
-        _total_data_traffic = pkt_length;
-    } else {
-        _total_data_traffic += pkt_length;
-        if ((now.tv_sec - _total_ellapsed.tv_sec) >= SECONDS_FOR_SPEED_CALC) {
-            delta_s = (float)(now.tv_sec - _total_ellapsed.tv_sec);
-            delta_s += ((float)(now.tv_nsec - _total_ellapsed.tv_nsec)) / 1000000000.0f;
-            _total_speed = (float)_total_data_traffic / delta_s;
-            _total_data_traffic = 0;
-            memcpy(&_total_ellapsed, &now, sizeof(struct timespec));
+    if (upload == DIR_UPLOAD) {
+        if (_total_upload_ellapsed.tv_sec == 0) {
+            memcpy(&_total_upload_ellapsed, &now, sizeof(struct timespec));
+            _total_upload_traffic = pkt_length;
+        } else {
+            _total_upload_traffic += pkt_length;
+            if ((now.tv_sec - _total_upload_ellapsed.tv_sec) >= SECONDS_FOR_SPEED_CALC) {
+                delta_s = (float) (now.tv_sec - _total_upload_ellapsed.tv_sec);
+                delta_s += ((float) (now.tv_nsec - _total_upload_ellapsed.tv_nsec)) / 1000000000.0f;
+                _total_upload_speed[_total_upload_idx] = (float) _total_upload_traffic / delta_s;
+                _total_upload_traffic = 0;
+                memcpy(&_total_upload_ellapsed, &now, sizeof(struct timespec));
 
-            printf("Avg. Total Speed: %.3f\n", _total_speed);
+                if ((++_total_upload_idx) >= TOTAL_SPEED_AVG_LENGTH)
+                    _total_upload_idx = 0;
+            }
+        }
+    } else {
+        if (_total_download_ellapsed.tv_sec == 0) {
+            memcpy(&_total_download_ellapsed, &now, sizeof(struct timespec));
+            _total_download_traffic = pkt_length;
+        } else {
+            _total_download_traffic += pkt_length;
+            if ((now.tv_sec - _total_download_ellapsed.tv_sec) >= SECONDS_FOR_SPEED_CALC) {
+                delta_s = (float)(now.tv_sec - _total_download_ellapsed.tv_sec);
+                delta_s += ((float)(now.tv_nsec - _total_download_ellapsed.tv_nsec)) / 1000000000.0f;
+                _total_download_speed[_total_download_idx] = (float)_total_download_traffic / delta_s;
+                _total_download_traffic = 0;
+                memcpy(&_total_download_ellapsed, &now, sizeof(struct timespec));
+
+                if ((++_total_download_idx) >= TOTAL_SPEED_AVG_LENGTH)
+                    _total_download_idx = 0;
+            }
         }
     }
 
@@ -134,8 +161,20 @@ terminate:
     return rtn;
 }
 
-float device_stat_net_speed(void) {
-    return _total_speed;
+float device_stat_net_speed(traffic_dir_t direction) {
+    int idx;
+    float *array_to_use;
+    float sum = 0;
+
+    if (direction == DIR_UPLOAD)
+        array_to_use = _total_upload_speed;
+    else
+        array_to_use = _total_download_speed;
+
+    for (idx = 0; idx < TOTAL_SPEED_AVG_LENGTH; idx++)
+        sum += array_to_use[idx];
+
+    return (sum / (float)TOTAL_SPEED_AVG_LENGTH);
 }
 
 static struct network_node *search_list(struct network_node *nodes, size_t length, struct in_addr target_ip) {
