@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <microhttpd.h>
+#include <json.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 #include "http.h"
 
 #define RESP_INT_BUFFER_LENGTH        2048
@@ -64,6 +68,9 @@ void http_update_network_list(struct network_node *nodes, size_t length) {
     pthread_mutex_unlock(&http_network_list_lock);
 }
 
+#define JSON_KEY_DEVICE    "device"
+#define JSON_KEY_SPEED     "speed"
+
 static enum MHD_Result ahc_echo (void *cls,
           struct MHD_Connection *connection,
           const char *url,
@@ -74,18 +81,48 @@ static enum MHD_Result ahc_echo (void *cls,
     char generated_resp[RESP_INT_BUFFER_LENGTH];
     int resp_length;
     struct MHD_Response *response;
+    enum MHD_Result  res;
+    int resp_code;
+    int idx;
+    struct json_object *jarray, *jobj;
 
     if (strcmp(method, "GET") != 0) {
         resp_str = (char *)http_resp_401;
+        resp_code = MHD_HTTP_UNAUTHORIZED;
     } else {
+        jarray = json_object_new_array();
 
+        if (strcmp(url,"/devices") == 0) {
+            pthread_mutex_lock(&http_network_list_lock);
+            for (idx = 0; idx < _int_node_count; idx++) {
+                jobj = json_object_new_object();
+                json_object_object_add(jobj, JSON_KEY_DEVICE,
+                                       json_object_new_string(inet_ntoa(_internal_nodes[idx].own.ip)));
+
+                json_object_object_add(jobj, JSON_KEY_SPEED,
+                                       json_object_new_double((double)_internal_nodes[idx].avg_speed));
+
+                json_object_array_add(jarray, jobj);
+            }
+
+            strcpy(generated_resp, json_object_to_json_string(jarray));
+            pthread_mutex_unlock(&http_network_list_lock);
+
+            json_object_put(jarray);
+            json_object_put(jobj);
+
+            resp_str = generated_resp;
+            resp_code = MHD_HTTP_OK;
+        }
     }
 
     resp_length = strlen(resp_str);
     response = MHD_create_response_from_buffer (resp_length,
                                                 (void *) resp_str,
                                                 MHD_RESPMEM_MUST_COPY);
-    ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
+
+    MHD_add_response_header(response, "Content-Type", "text/json");
+    res = MHD_queue_response (connection, resp_code, response);
     MHD_destroy_response (response);
-    return ret;
+    return res;
 }
