@@ -8,9 +8,10 @@
 #include <pthread.h>
 #include "device_stat.h"
 
-extern pthread_mutex_t http_network_list_lock;
+//extern pthread_mutex_t http_network_list_lock;
 
 int http_init(unsigned short port);
+void http_end(void);
 void http_update_network_list(struct network_node *nodes, size_t length);
 
 #endif //NETWORK_LOG_HTTP_H

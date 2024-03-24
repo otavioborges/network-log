@@ -7,7 +7,10 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <time.h>
 #include "device_stat.h"
+
+#define SECONDS_FOR_SPEED_CALC   1
 
 static struct network_node *search_list(struct network_node *nodes, size_t length, struct in_addr target_ip);
 static struct device_stat *search_device(struct device_stat *devs, size_t length, struct in_addr target_ip);
@@ -19,8 +22,11 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
     char *token = NULL, *cline = NULL;
     struct network_node *own_node = NULL;
     struct device_stat *destination = NULL;
+    struct timespec now;
+    float delta_s;
 
     // 2024-03-23T16:17:32.028470+00:00 mr-fishoeder kernel: [316721.158546] [IPTABLES]:IN=enp6s0f1 OUT=enp6s0f0 MAC=a0:36:9f:09:4b:45:16:47:f7:c4:19:ed:08:00 SRC=10.20.0.32 DST=74.125.195.188 LEN=52 TOS=0x00 PREC=0x00 TTL=63 ID=53887 DF PROTO=TCP SPT=59428 DPT=5228 WINDOW=661 RES=0x00 ACK URGP=0
+    clock_gettime(CLOCK_MONOTONIC, &now);
     cline = strdup(line);
     token = strtok(cline, " ");
     while (token) {
@@ -46,6 +52,8 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
 
     own_node = search_list(*nodes, *length, sender);
     if (own_node == NULL) {
+        /* flag that list is updated */
+        rtn = 1;
         *nodes = (struct network_node *) realloc(*nodes, sizeof(struct network_node) * ((*length) + 1));
         own_node = (*nodes) + (*length);
         (*length)++;
@@ -62,13 +70,18 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
         own_node->own.total_data = pkt_length;
         own_node->peers = (struct device_stat *) malloc(sizeof(struct device_stat));
         own_node->peers_length = 1;
+        own_node->data_accumulator = pkt_length;
+        memcpy(&own_node->accu_start, &now, sizeof(struct timespec));
 
         destination = own_node->peers;
         destination->total_data = 0;
     } else {
         own_node->own.total_data += pkt_length;
+        own_node->data_accumulator += pkt_length;
         destination = search_device(own_node->peers, own_node->peers_length, rcv);
         if (destination == NULL) {
+            /* flag that list is updated */
+            rtn = 1;
             own_node->peers = (struct device_stat *) realloc(own_node->peers, sizeof(struct device_stat) * (own_node->peers_length + 1));
             if ((own_node->peers) == NULL) {
                 fprintf(stderr, "Error appending new Destination \'%s\' to node \'%s\'. Reason: %s (%d)\n",
@@ -80,6 +93,14 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
             destination = (own_node->peers + own_node->peers_length);
             destination->total_data = 0;
             own_node->peers_length++;
+        }
+
+        if ((now.tv_sec - own_node->accu_start.tv_sec) >= SECONDS_FOR_SPEED_CALC) {
+            delta_s = now.tv_sec - own_node->accu_start.tv_sec;
+            delta_s += ((float)(now.tv_nsec - own_node->accu_start.tv_nsec)) / 1000000000.0f;
+            own_node->avg_speed = (float)own_node->data_accumulator / delta_s;
+            own_node->data_accumulator = 0;
+            memcpy(&own_node->accu_start, &now, sizeof(struct timespec));
         }
     }
 

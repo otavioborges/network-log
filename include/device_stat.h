@@ -18,6 +18,9 @@ struct network_node {
     struct device_stat own;
     struct device_stat *peers;
     size_t peers_length;
+    size_t data_accumulator;
+    float avg_speed;
+    struct timespec accu_start;
 };
 
 int device_stat_init(struct network_node *nodes);

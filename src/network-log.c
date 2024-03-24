@@ -149,8 +149,8 @@ int main (int argc, char **argv) {
     int jdx;
     if (net_devices) {
         for (idx = 0; idx < net_dev_count; idx++) {
-            printf("Network dev.: %s (total data %ldB):\n",
-                   inet_ntoa(net_devices[idx].own.ip), net_devices[idx].own.total_data);
+            printf("Network dev.: %s (total data %ldB) (Avg. Speed: %.3fBps)\n",
+                   inet_ntoa(net_devices[idx].own.ip), net_devices[idx].own.total_data, net_devices[idx].avg_speed);
 
             for (jdx = 0; jdx < net_devices[idx].peers_length; jdx++) {
                 printf("\tPeer: %s (total data: %ldB)\n",
