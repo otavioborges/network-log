@@ -14,11 +14,13 @@
 #include "options.h"
 #include "config.h"
 #include "device_stat.h"
+#include "http.h"
 
-#define BUFFER_LENGTH    2048
-#define POLL_TIMEO_US    100000
-#define PID_FILE         "./network-log.pid"
-//#define PID_FILE         "/var/run/network-log.pid"
+#define BUFFER_LENGTH     2048
+#define POLL_TIMEO_US     100000
+#define HTTP_DEFAULT_PORT 2837
+#define PID_FILE          "./network-log.pid"
+//#define PID_FILE          "/var/run/network-log.pid"
 
 static void sig_handler(int signo);
 static int print_help(int rtn, const char *argv0, char *msg, ...);
@@ -124,6 +126,13 @@ int main (int argc, char **argv) {
         goto terminate;
     }
 
+    printf("Initating HTTP server at port %u...\n", HTTP_DEFAULT_PORT);
+    if (http_init(HTTP_DEFAULT_PORT)) {
+        fprintf(stderr, "Error initiating HTTP server\n");
+        rtn = -1;
+        goto terminate;
+    }
+
     signal(SIGINT, sig_handler);
     while(_continue) {
         fseek(h_log, 0, SEEK_END);
@@ -140,6 +149,7 @@ int main (int argc, char **argv) {
                     _continue = 0;
                     break;
                 }
+                http_update_network_list(net_devices, net_dev_count);
             }
         } else {
             usleep(POLL_TIMEO_US);
@@ -161,6 +171,7 @@ int main (int argc, char **argv) {
 
     printf("Shutting down...\n");
     fclose(h_log);
+    http_end();
 
     if (read_buffer) {
         free(read_buffer);

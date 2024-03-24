@@ -25,5 +25,6 @@ struct network_node {
 
 int device_stat_init(struct network_node *nodes);
 int device_stat_parse_line(struct network_node **nodes, size_t *length, char *line);
+float device_stat_net_speed(void);
 
 #endif //NETWORK_LOG_DEVICE_STAT_H

@@ -12,6 +12,10 @@
 
 #define SECONDS_FOR_SPEED_CALC   1
 
+static uint64_t _total_data_traffic = 0;
+static struct timespec _total_ellapsed = {0};
+static float _total_speed = 0;
+
 static struct network_node *search_list(struct network_node *nodes, size_t length, struct in_addr target_ip);
 static struct device_stat *search_device(struct device_stat *devs, size_t length, struct in_addr target_ip);
 
@@ -48,6 +52,22 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
         }
 
         token = strtok(NULL, " ");
+    }
+
+    if (_total_ellapsed.tv_sec == 0) {
+        memcpy(&_total_ellapsed, &now, sizeof(struct timespec));
+        _total_data_traffic = pkt_length;
+    } else {
+        _total_data_traffic += pkt_length;
+        if ((now.tv_sec - _total_ellapsed.tv_sec) >= SECONDS_FOR_SPEED_CALC) {
+            delta_s = (float)(now.tv_sec - _total_ellapsed.tv_sec);
+            delta_s += ((float)(now.tv_nsec - _total_ellapsed.tv_nsec)) / 1000000000.0f;
+            _total_speed = (float)_total_data_traffic / delta_s;
+            _total_data_traffic = 0;
+            memcpy(&_total_ellapsed, &now, sizeof(struct timespec));
+
+            printf("Avg. Total Speed: %.3f\n", _total_speed);
+        }
     }
 
     own_node = search_list(*nodes, *length, sender);
@@ -96,7 +116,7 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
         }
 
         if ((now.tv_sec - own_node->accu_start.tv_sec) >= SECONDS_FOR_SPEED_CALC) {
-            delta_s = now.tv_sec - own_node->accu_start.tv_sec;
+            delta_s = (float)(now.tv_sec - own_node->accu_start.tv_sec);
             delta_s += ((float)(now.tv_nsec - own_node->accu_start.tv_nsec)) / 1000000000.0f;
             own_node->avg_speed = (float)own_node->data_accumulator / delta_s;
             own_node->data_accumulator = 0;
@@ -112,6 +132,10 @@ terminate:
         free(cline);
 
     return rtn;
+}
+
+float device_stat_net_speed(void) {
+    return _total_speed;
 }
 
 static struct network_node *search_list(struct network_node *nodes, size_t length, struct in_addr target_ip) {

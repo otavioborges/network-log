@@ -65,6 +65,7 @@ void http_update_network_list(struct network_node *nodes, size_t length) {
 
     _internal_nodes = (struct network_node *) malloc(sizeof(struct network_node) * length);
     memcpy(_internal_nodes, nodes, sizeof(struct network_node) * length);
+    _int_node_count = length;
     pthread_mutex_unlock(&http_network_list_lock);
 }
 
@@ -92,7 +93,7 @@ static enum MHD_Result ahc_echo (void *cls,
     } else {
         jarray = json_object_new_array();
 
-        if (strcmp(url,"/devices") == 0) {
+        if (strcmp(url,"/api/devices") == 0) {
             pthread_mutex_lock(&http_network_list_lock);
             for (idx = 0; idx < _int_node_count; idx++) {
                 jobj = json_object_new_object();
@@ -100,7 +101,7 @@ static enum MHD_Result ahc_echo (void *cls,
                                        json_object_new_string(inet_ntoa(_internal_nodes[idx].own.ip)));
 
                 json_object_object_add(jobj, JSON_KEY_SPEED,
-                                       json_object_new_double((double)_internal_nodes[idx].avg_speed));
+                                       json_object_new_double((double) _internal_nodes[idx].avg_speed));
 
                 json_object_array_add(jarray, jobj);
             }
@@ -109,10 +110,14 @@ static enum MHD_Result ahc_echo (void *cls,
             pthread_mutex_unlock(&http_network_list_lock);
 
             json_object_put(jarray);
-            json_object_put(jobj);
 
             resp_str = generated_resp;
             resp_code = MHD_HTTP_OK;
+        } else if (strcmp(url,"/api/speed") == 0) {
+            jobj =
+        } else {
+            resp_str = (char *)http_resp_404;
+            resp_code = MHD_HTTP_NOT_FOUND;
         }
     }
 
