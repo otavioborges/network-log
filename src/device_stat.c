@@ -28,7 +28,7 @@ static struct device_stat *search_device(struct device_stat *devs, size_t length
 
 int device_stat_parse_line(struct network_node **nodes, size_t *length, char *line, traffic_dir_t upload) {
     int rtn = 0;
-    struct in_addr sender, rcv;
+    struct in_addr sender, rcv, swap;
     size_t pkt_length = 0;
     char *token = NULL, *cline = NULL;
     struct network_node *own_node = NULL;
@@ -59,6 +59,13 @@ int device_stat_parse_line(struct network_node **nodes, size_t *length, char *li
         }
 
         token = strtok(NULL, " ");
+    }
+
+    if (upload == DIR_DOWNLOAD) {
+        /* invert src-dst for downloads */
+        swap.s_addr = sender.s_addr;
+        sender.s_addr = rcv.s_addr;
+        rcv.s_addr = swap.s_addr;
     }
 
     if (upload == DIR_UPLOAD) {

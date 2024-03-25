@@ -15,6 +15,7 @@
 #include "config.h"
 #include "device_stat.h"
 #include "http.h"
+#include "hw_use.h"
 
 #define BUFFER_LENGTH     2048
 #define POLL_TIMEO_US     100000
@@ -134,6 +135,11 @@ int main (int argc, char **argv) {
         }
     }
 
+    if (hw_use_init()) {
+        fprintf(stderr, "Error initiating HW overseer. Exiting...\n");
+        goto terminate;
+    }
+
     /* We are either foreground or daemon */
     printf("Trying to open log file \'%s\'...\n", upload_file);
     rtn = open(upload_file, O_RDONLY | O_NONBLOCK);
@@ -236,6 +242,7 @@ int main (int argc, char **argv) {
     printf("Shutting down...\n");
     fclose(h_upload);
     http_end();
+    hw_use_terminate();
 
     if (read_upload) {
         free(read_upload);

@@ -12,11 +12,14 @@
 #include <errno.h>
 
 #include "http.h"
+#include "hw_use.h"
 
 #define JSON_KEY_DEVICE               "device"
 #define JSON_KEY_SPEED                "speed"
+#define JSON_KEY_TOTAL                "totalTraffic"
 #define JSON_KEY_UPLOAD               "upload"
 #define JSON_KEY_DOWNLOAD             "download"
+#define JSON_KEY_CPU                  "cpuUse"
 
 #define MIME_HTTP                     "text/html"
 #define MIME_JSON                     "text/json"
@@ -26,7 +29,8 @@
 #define MIME_IMAGE_GIF                "image/gif"
 #define MIME_BINARY                   "application/octet-stream"
 
-#define RESP_INT_BUFFER_LENGTH        2048
+#define BUFFER_LENGTH                 2048
+#define RESP_INT_BUFFER_LENGTH        (2048 *1024)
 
 static const char *http_resp_404 = "{\"error\":404}";
 static const char *http_resp_400 = "{\"error\":400}";
@@ -100,7 +104,7 @@ void http_update_download_list(struct network_node *nodes, size_t length) {
     pthread_mutex_lock(&http_network_list_lock);
     if (_download_nodes) {
         free(_download_nodes);
-        _upload_nodes = NULL;
+        _download_nodes = NULL;
     }
 
     _download_nodes = (struct network_node *) malloc(sizeof(struct network_node) * length);
@@ -117,52 +121,54 @@ static enum MHD_Result ahc_echo (void *cls,
           const char *upload_data, size_t *upload_data_size, void **ptr) {
     char *resp_str = NULL, *content_type = MIME_JSON, *ext = NULL;
     char generated_resp[RESP_INT_BUFFER_LENGTH];
-    char resp_file[RESP_INT_BUFFER_LENGTH];
+    char resp_file[BUFFER_LENGTH];
     int resp_length;
+    size_t list_length;
     struct MHD_Response *response;
     enum MHD_Result  res;
     int resp_code, idx, fd;
     struct json_object *jarray, *jobj;
+    struct network_node *list;
 
     if (strcmp(method, "GET") != 0) {
         resp_str = (char *)http_resp_401;
         resp_code = MHD_HTTP_UNAUTHORIZED;
         resp_length = strlen(resp_str);
     } else {
-        if (strcmp(url,"/api/upload") == 0) {
-            jarray = json_object_new_array();
+        if (strcmp(url,"/api/system") == 0) {
+            jobj = json_object_new_object();
 
-            pthread_mutex_lock(&http_network_list_lock);
-            for (idx = 0; idx < _upload_node_count; idx++) {
-                jobj = json_object_new_object();
-                json_object_object_add(jobj, JSON_KEY_DEVICE,
-                                       json_object_new_string(inet_ntoa(_upload_nodes[idx].own.ip)));
+            json_object_object_add(jobj, JSON_KEY_CPU, json_object_new_double((double)hw_use_current_cpu_usage()));
 
-                json_object_object_add(jobj, JSON_KEY_SPEED,
-                                       json_object_new_double((double) _upload_nodes[idx].avg_speed));
-
-                json_object_array_add(jarray, jobj);
-            }
-
-            strcpy(generated_resp, json_object_to_json_string(jarray));
-            pthread_mutex_unlock(&http_network_list_lock);
-
-            json_object_put(jarray);
+            strcpy(generated_resp, json_object_to_json_string(jobj));
+            json_object_put(jobj);
+            jobj = NULL;
 
             resp_str = generated_resp;
             resp_code = MHD_HTTP_OK;
             resp_length = strlen(resp_str);
-        } else if (strcmp(url,"/api/download") == 0) {
+        } else if ((strcmp(url,"/api/upload") == 0) || (strcmp(url,"/api/download") == 0)) {
             jarray = json_object_new_array();
 
             pthread_mutex_lock(&http_network_list_lock);
-            for (idx = 0; idx < _download_node_count; idx++) {
+            if (strcmp(url,"/api/upload") == 0) {
+                list = _upload_nodes;
+                list_length = _upload_node_count;
+            } else {
+                list = _download_nodes;
+                list_length = _download_node_count;
+            }
+
+            for (idx = 0; idx < list_length; idx++) {
                 jobj = json_object_new_object();
                 json_object_object_add(jobj, JSON_KEY_DEVICE,
-                                       json_object_new_string(inet_ntoa(_download_nodes[idx].own.ip)));
+                                       json_object_new_string(inet_ntoa(list[idx].own.ip)));
 
                 json_object_object_add(jobj, JSON_KEY_SPEED,
-                                       json_object_new_double((double) _download_nodes[idx].avg_speed));
+                                       json_object_new_double((double) list[idx].avg_speed));
+
+                json_object_object_add(jobj, JSON_KEY_TOTAL,
+                                       json_object_new_int64((int64_t)list[idx].own.total_data));
 
                 json_object_array_add(jarray, jobj);
             }
@@ -171,6 +177,7 @@ static enum MHD_Result ahc_echo (void *cls,
             pthread_mutex_unlock(&http_network_list_lock);
 
             json_object_put(jarray);
+            jarray = NULL;
 
             resp_str = generated_resp;
             resp_code = MHD_HTTP_OK;
@@ -182,19 +189,21 @@ static enum MHD_Result ahc_echo (void *cls,
 
             strcpy(generated_resp, json_object_to_json_string(jobj));
             json_object_put(jobj);
+            jobj = NULL;
 
             resp_str = generated_resp;
             resp_code = MHD_HTTP_OK;
             resp_length = strlen(resp_str);
         } else {
             if (strcmp(url,"/") == 0)
-                snprintf(resp_file, RESP_INT_BUFFER_LENGTH, "%s/index.htm", _http_file_path);
+                snprintf(resp_file, BUFFER_LENGTH, "%s/index.htm", _http_file_path);
             else
-                snprintf(resp_file, RESP_INT_BUFFER_LENGTH, "%s%s", _http_file_path, url);
+                snprintf(resp_file, BUFFER_LENGTH, "%s%s", _http_file_path, url);
 
             if (access(resp_file, F_OK) != 0) {
                 resp_str = (char *) http_resp_404;
                 resp_code = MHD_HTTP_NOT_FOUND;
+                resp_length = strlen(resp_str);
             } else {
                 fd = open(resp_file, O_RDONLY);
                 if (fd < 0) {
@@ -203,6 +212,7 @@ static enum MHD_Result ahc_echo (void *cls,
 
                     resp_str = (char *) http_resp_404;
                     resp_code = MHD_HTTP_NOT_FOUND;
+                    resp_length = strlen(resp_str);
                 } else {
                     ext = strrchr(resp_file, '.');
                     if (ext == NULL) {
