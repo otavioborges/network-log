@@ -20,6 +20,8 @@
 #define JSON_KEY_UPLOAD               "upload"
 #define JSON_KEY_DOWNLOAD             "download"
 #define JSON_KEY_CPU                  "cpuUse"
+#define JSON_KEY_TOTAL_RAM            "totalRAM"
+#define JSON_KEY_IN_USE_RAM           "inUseRAM"
 
 #define MIME_HTTP                     "text/html"
 #define MIME_JSON                     "text/json"
@@ -127,6 +129,7 @@ static enum MHD_Result ahc_echo (void *cls,
     struct MHD_Response *response;
     enum MHD_Result  res;
     int resp_code, idx, fd;
+    int64_t total_ram, in_use_ram;
     struct json_object *jarray, *jobj;
     struct network_node *list;
 
@@ -139,6 +142,9 @@ static enum MHD_Result ahc_echo (void *cls,
             jobj = json_object_new_object();
 
             json_object_object_add(jobj, JSON_KEY_CPU, json_object_new_double((double)hw_use_current_cpu_usage()));
+            hw_use_system_ram(&total_ram, &in_use_ram);
+            json_object_object_add(jobj, JSON_KEY_TOTAL_RAM, json_object_new_int64(total_ram));
+            json_object_object_add(jobj, JSON_KEY_IN_USE_RAM, json_object_new_int64(in_use_ram));
 
             strcpy(generated_resp, json_object_to_json_string(jobj));
             json_object_put(jobj);
