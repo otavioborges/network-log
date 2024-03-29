@@ -95,6 +95,7 @@ static int monitor_cpu_usage(void) {
     static char *line = NULL;
     static size_t line_length = 0;
     long long user, nice, system, idle, iowait, irq, softirq;
+    static long long last_total = 0, last_idle = 0;
     long long total;
 
     fd = fopen("/proc/stat", "r");
@@ -112,9 +113,12 @@ static int monitor_cpu_usage(void) {
 
     sscanf(line, "%*s %lld %lld %lld %lld %lld %lld %lld", &user, &nice, &system, &idle, &iowait, &irq, &softirq);
     total = (user + nice + system + idle + iowait + irq + softirq);
-    _cpu_usage[_cpu_usage_idx] = 100.0f - ((idle * 100.0f) / (float)total);
+    _cpu_usage[_cpu_usage_idx] = 100.0f - (((float)(idle - last_idle) * 100.0f) / (float)(total - last_total));
     if ((++_cpu_usage_idx) > CPU_USAGE_AVG_LENGTH)
         _cpu_usage_idx = 0;
+
+    last_idle = idle;
+    last_total = total;
 
     return 0;
 }
